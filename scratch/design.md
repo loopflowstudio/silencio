@@ -2,7 +2,42 @@
 
 ## Vision
 
-Real-time responsive collaborative AI musicians. Start with a smart metronome that exports symbolic + timbre data. Build up to full band collaboration.
+**Silencio** = RL environment for training collaborative AI musicians.
+**Reward** = metrics about how Cadenza users actually play.
+
+Train policies that make users *better musicians* — measured by improvement, engagement, and return rate.
+
+### The Loop
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                         Cadenza                              │
+│   (app: collects user behavior, deploys policies)           │
+└──────────────────────────┬──────────────────────────────────┘
+                           │ user metrics
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│                         Silencio                             │
+│   (library: RL training, policy optimization)               │
+│                                                              │
+│   Reward = f(timing_improvement, session_length, return)    │
+│                                                              │
+│   Policies:                                                  │
+│     • Metronome → Drummer                                   │
+│     • Drummer → Bassist                                     │
+│     • Bassist → Pianist                                     │
+│     • ...full band                                          │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Progression
+
+| Stage | Policy | Action Space | Reward Signal |
+|-------|--------|--------------|---------------|
+| v0 | Smart metronome | when to click | hand-coded (baseline) |
+| v1 | Drummer | which drum, when | user timing improvement |
+| v2 | Bassist | root/fifth, when | user stays in pocket |
+| v3 | Pianist/Guitar | chord voicing, rhythm | user engagement, return |
 
 ---
 
@@ -402,9 +437,91 @@ silencio/
 
 ---
 
+---
+
+## Reward: Cadenza User Outcomes
+
+Silencio doesn't simulate reward — it gets real signal from Cadenza users.
+
+### Observable Metrics
+
+```python
+@dataclass
+class UserSession:
+    user_id: str
+    timestamp: datetime
+
+    # Timing data
+    onset_times: list[float]      # when user played
+    ai_beat_times: list[float]    # when AI played
+
+    # Engagement
+    duration_seconds: float
+    completed: bool               # finished vs quit early
+
+    # Feedback
+    explicit_rating: int | None   # thumbs up/down, 1-5 stars
+
+@dataclass
+class UserHistory:
+    sessions: list[UserSession]
+
+    def timing_improvement(self, window: int = 5) -> float:
+        """Variance reduction across recent sessions."""
+
+    def return_rate(self, days: int = 7) -> float:
+        """Probability of returning within N days."""
+
+    def avg_session_duration(self) -> float:
+        """Engagement proxy."""
+```
+
+### Reward Function
+
+```python
+def compute_reward(session: UserSession, history: UserHistory) -> float:
+    """
+    Reward for a single session, given user history.
+
+    This is what we're maximizing — users becoming better musicians
+    and wanting to keep practicing.
+    """
+
+    # Short-term: did they improve during this session?
+    within_session = timing_improvement_within(session)
+
+    # Medium-term: are they improving across sessions?
+    across_sessions = history.timing_improvement(window=5)
+
+    # Engagement: are they practicing more?
+    engagement = session.duration_seconds / 600  # normalize to 10min
+
+    # Retention: do they come back? (delayed, most important)
+    # This is filled in later when we know if they returned
+    retention = history.return_rate(days=3)
+
+    return (
+        0.2 * within_session +
+        0.2 * across_sessions +
+        0.2 * engagement +
+        0.4 * retention
+    )
+```
+
+### Training Loop
+
+1. **Cadenza** logs all sessions with full timing data
+2. **Silencio** trains policies offline on historical data
+3. **Cadenza** deploys new policy, collects more data
+4. Repeat
+
+---
+
 ## Open Questions
 
 1. **Embedding dimension**: 256? 512? Match existing audio models?
 2. **Text encoder**: sentence-transformers, CLAP, or custom?
 3. **Audio synthesis**: Wavetable with timbre-controlled filtering? Neural vocoder?
 4. **Real-time latency target**: 10ms? 20ms?
+5. **Exploration strategy**: How to try new policies without hurting user experience?
+6. **Cold start**: What policy for new users with no history?
