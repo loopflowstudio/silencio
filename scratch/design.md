@@ -10,17 +10,85 @@ Real-time responsive collaborative AI musicians. Start with a smart metronome th
 
 A metronome that produces structured output: **symbolic timing + timbre embedding per beat**.
 
-### Core Abstraction: Score
+### Behavioral Model: Responsiveness Zones
+
+The metronome doesn't just click — it *responds* to the human player with a zone-based model:
+
+```
+                    ◄─────── follow_limit ───────►
+                    ◄───── follow_zone ─────►
+                    ◄─── snap_zone ───►
+     ────────────────────|●|────────────────────
+                       beat
+```
+
+**Three zones:**
+
+1. **Snap Zone** (±20ms): If you're close to on-beat, the AI holds you exactly on beat. Corrective, stabilizing. "You're doing great, stay right here."
+
+2. **Follow Zone** (±100ms): If you drift further, the AI adjusts its tempo to follow your lead. Adaptive, responsive. "I hear you pushing, I'll come with you."
+
+3. **Limits** (±200ms): Hard bounds. The AI won't let you go completely off the rails. "That's as far as I'll stretch."
 
 ```python
 @dataclass
+class ResponsivenessConfig:
+    snap_threshold_ms: float = 20.0      # snap to grid within this
+    follow_threshold_ms: float = 100.0   # follow human within this
+    limit_threshold_ms: float = 200.0    # hard limit
+    follow_strength: float = 0.5         # 0=ignore human, 1=match exactly
+
+def compute_next_beat(
+    expected_beat_time: float,
+    human_onset_time: float,
+    config: ResponsivenessConfig,
+) -> float:
+    """Compute when the AI should play its next beat."""
+    deviation_ms = (human_onset_time - expected_beat_time) * 1000
+
+    if abs(deviation_ms) < config.snap_threshold_ms:
+        # Snap zone: hold them on beat
+        return expected_beat_time
+
+    elif abs(deviation_ms) < config.follow_threshold_ms:
+        # Follow zone: blend between grid and human
+        t = (abs(deviation_ms) - config.snap_threshold_ms) / (
+            config.follow_threshold_ms - config.snap_threshold_ms
+        )
+        blend = t * config.follow_strength
+        return expected_beat_time + blend * (human_onset_time - expected_beat_time)
+
+    else:
+        # Beyond follow zone: follow with limits
+        max_deviation = config.limit_threshold_ms / 1000
+        clamped_deviation = max(-max_deviation, min(max_deviation,
+            human_onset_time - expected_beat_time))
+        return expected_beat_time + clamped_deviation
+```
+
+**Why this matters for RL:**
+- The responsiveness config becomes part of the **action space** or **learned parameters**
+- Different musical contexts want different zones (tight jazz vs loose jam)
+- The model learns when to snap vs when to follow
+
+### Core Abstraction: Score
+
+```python
+class ResponseMode(Enum):
+    SNAP = "snap"        # holding human on beat
+    FOLLOW = "follow"    # adjusting to human tempo
+    LIMIT = "limit"      # at maximum stretch
+
+@dataclass
 class Beat:
     """A single metronome event."""
-    timestamp: float          # seconds from start
+    timestamp: float          # seconds from start (may be adjusted from grid)
+    grid_timestamp: float     # ideal timestamp on perfect grid
     beat_number: int          # 1-indexed within measure
     measure: int              # 1-indexed measure number
     emphasis: float           # 0.0-1.0 (downbeat=1.0, others lower)
     timbre: TimbreEmbedding   # sound character for this beat
+    response_mode: ResponseMode = ResponseMode.SNAP  # how AI responded
 
 @dataclass
 class Score:
