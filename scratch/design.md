@@ -30,14 +30,28 @@ Train policies that make users *better musicians* — measured by improvement, e
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### Progression
+### Policies
 
-| Stage | Policy | Action Space | Reward Signal |
-|-------|--------|--------------|---------------|
-| v0 | Smart metronome | when to click | hand-coded (baseline) |
-| v1 | Drummer | which drum, when | user timing improvement |
-| v2 | Bassist | root/fifth, when | user stays in pocket |
-| v3 | Pianist/Guitar | chord voicing, rhythm | user engagement, return |
+**Rhythm (continuum):** Metronome morphs into Drummer
+```
+Metronome ──────────────────────────► Drummer
+  │                                      │
+  │ click on beat                        │ kick, snare, hats
+  │ responsiveness zones                 │ fills, dynamics
+  │ hand-coded baseline                  │ learned policy
+```
+
+**Collaborators (independent):**
+```
+┌──────────────┐  ┌──────────────┐  ┌──────────────┐
+│   Bassist    │  │   Pianist    │  │   Guitar     │
+│              │  │              │  │              │
+│ root/fifth   │  │ chord voicing│  │ rhythm/lead  │
+│ pocket, feel │  │ comping      │  │ fills        │
+└──────────────┘  └──────────────┘  └──────────────┘
+```
+
+Each collaborator is a separate policy trained on user outcomes.
 
 ---
 
