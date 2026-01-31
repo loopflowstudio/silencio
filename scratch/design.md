@@ -2,33 +2,49 @@
 
 ## Vision
 
-**Silencio** = RL environment for training collaborative AI musicians.
-**Reward** = metrics about how Cadenza users actually play.
+**Silencio** = multi-agent RL environment for training collaborative AI musicians.
 
-Train policies that make users *better musicians* — measured by improvement, engagement, and return rate.
+**Core insight:** Your reward is how well the *other players respond* to you.
 
-### The Loop
+A good bass line makes the drummer lock in tighter. A good drum pattern makes the pianist comp better. Quality is measured by what you enable in others.
+
+### Multi-Agent Reward
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                         Cadenza                              │
-│   (app: collects user behavior, deploys policies)           │
-└──────────────────────────┬──────────────────────────────────┘
-                           │ user metrics
-                           ▼
-┌─────────────────────────────────────────────────────────────┐
-│                         Silencio                             │
-│   (library: RL training, policy optimization)               │
-│                                                              │
-│   Reward = f(timing_improvement, session_length, return)    │
-│                                                              │
-│   Policies:                                                  │
-│     • Metronome → Drummer                                   │
-│     • Drummer → Bassist                                     │
-│     • Bassist → Pianist                                     │
-│     • ...full band                                          │
-└─────────────────────────────────────────────────────────────┘
+       ┌─────────┐
+       │ Drummer │──────────────────────┐
+       └────┬────┘                      │
+            │ plays                     │
+            ▼                           │
+       ┌─────────┐                      │
+       │ Bassist │──────────────────┐   │
+       └────┬────┘                  │   │
+            │ plays                 │   │
+            ▼                       │   │
+       ┌─────────┐                  │   │
+       │ Pianist │                  │   │
+       └────┬────┘                  │   │
+            │                       │   │
+            ▼                       ▼   ▼
+    ┌───────────────────────────────────────┐
+    │  Reward for Drummer =                 │
+    │    f(how well Bassist + Pianist       │
+    │      respond from here forward)       │
+    └───────────────────────────────────────┘
 ```
+
+Each agent is rewarded based on the *future quality of play* it enables in others.
+
+### Training at Scale
+
+**Self-play:** AI agents train against each other. No human data needed for core training.
+
+**Cadenza integration:** Human data for:
+- Validation (does it transfer?)
+- Fine-tuning (human preferences)
+- Deployment (real product)
+
+But the main training loop is agents learning to collaborate with each other.
 
 ### Policies
 
@@ -453,81 +469,88 @@ silencio/
 
 ---
 
-## Reward: Cadenza User Outcomes
+## Reward: Future Play Quality
 
-Silencio doesn't simulate reward — it gets real signal from Cadenza users.
-
-### Observable Metrics
+The core reward: **how well do others play after you?**
 
 ```python
-@dataclass
-class UserSession:
-    user_id: str
-    timestamp: datetime
-
-    # Timing data
-    onset_times: list[float]      # when user played
-    ai_beat_times: list[float]    # when AI played
-
-    # Engagement
-    duration_seconds: float
-    completed: bool               # finished vs quit early
-
-    # Feedback
-    explicit_rating: int | None   # thumbs up/down, 1-5 stars
-
-@dataclass
-class UserHistory:
-    sessions: list[UserSession]
-
-    def timing_improvement(self, window: int = 5) -> float:
-        """Variance reduction across recent sessions."""
-
-    def return_rate(self, days: int = 7) -> float:
-        """Probability of returning within N days."""
-
-    def avg_session_duration(self) -> float:
-        """Engagement proxy."""
-```
-
-### Reward Function
-
-```python
-def compute_reward(session: UserSession, history: UserHistory) -> float:
+def agent_reward(
+    agent_id: str,
+    my_action: Action,
+    future_trajectory: list[tuple[str, Action]],  # (agent_id, action) pairs
+    horizon: int = 16,  # beats to look ahead
+) -> float:
     """
-    Reward for a single session, given user history.
+    Reward = quality of other agents' play from this point forward.
 
-    This is what we're maximizing — users becoming better musicians
-    and wanting to keep practicing.
+    If I play something that helps others lock in, I get rewarded.
+    If I play something that throws others off, I get penalized.
     """
 
-    # Short-term: did they improve during this session?
-    within_session = timing_improvement_within(session)
+    other_actions = [
+        (aid, a) for aid, a in future_trajectory[:horizon]
+        if aid != agent_id
+    ]
 
-    # Medium-term: are they improving across sessions?
-    across_sessions = history.timing_improvement(window=5)
+    # Measure: did others stay in the pocket?
+    timing_quality = mean([
+        1.0 - abs(a.timing_deviation)
+        for _, a in other_actions
+    ])
 
-    # Engagement: are they practicing more?
-    engagement = session.duration_seconds / 600  # normalize to 10min
+    # Measure: did others play musically?
+    harmonic_quality = mean([
+        consonance_score(a.pitch, current_harmony)
+        for _, a in other_actions
+    ])
 
-    # Retention: do they come back? (delayed, most important)
-    # This is filled in later when we know if they returned
-    retention = history.return_rate(days=3)
+    # Measure: did the groove tighten or loosen?
+    groove_trajectory = groove_improvement(other_actions)
 
     return (
-        0.2 * within_session +
-        0.2 * across_sessions +
-        0.2 * engagement +
-        0.4 * retention
+        0.4 * timing_quality +
+        0.3 * harmonic_quality +
+        0.3 * groove_trajectory
     )
 ```
 
-### Training Loop
+**Key properties:**
+- Credit assignment through time (your action affects future)
+- Multi-agent coordination emerges naturally
+- No hand-designed "good music" reward — just "did others play better?"
 
-1. **Cadenza** logs all sessions with full timing data
-2. **Silencio** trains policies offline on historical data
-3. **Cadenza** deploys new policy, collects more data
-4. Repeat
+---
+
+## Cadenza Integration (Secondary)
+
+Human data from Cadenza supplements self-play:
+
+| Purpose | How |
+|---------|-----|
+| Validation | Does self-play transfer to humans? |
+| Fine-tuning | Adjust for human preferences/limitations |
+| Deployment | Ship policies to real users |
+
+```python
+@dataclass
+class HumanSession:
+    user_id: str
+    onset_times: list[float]      # when human played
+    ai_beat_times: list[float]    # when AI played
+    duration_seconds: float
+    returned_within_days: int | None
+
+def human_reward(session: HumanSession) -> float:
+    """Secondary reward signal from real humans."""
+    return (
+        0.3 * timing_improvement(session) +
+        0.3 * engagement_score(session) +
+        0.4 * float(session.returned_within_days is not None
+                    and session.returned_within_days <= 3)
+    )
+```
+
+Small user base → use for validation, not main training.
 
 ---
 
